@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>電力連系線・予備率ダッシュボード（非公式）</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  :root { --bg:#0f1720; --card:#182432; --fg:#e6edf3; --sub:#8b98a5; --accent:#4fa3ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font-family:system-ui,"Hiragino Sans","Noto Sans JP",sans-serif; }
+  header { padding:16px 20px; border-bottom:1px solid #24303e; }
+  h1 { font-size:18px; margin:0 0 4px; }
+  .meta { font-size:12px; color:var(--sub); }
+  main { display:grid; gap:16px; padding:16px 20px;
+         grid-template-columns:1fr; max-width:1100px; margin:0 auto; }
+  .card { background:var(--card); border-radius:12px; padding:16px; }
+  .card h2 { font-size:15px; margin:0 0 12px; }
+  select { background:#0f1720; color:var(--fg); border:1px solid #2a3947;
+           border-radius:6px; padding:4px 8px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:right; padding:6px 8px; border-bottom:1px solid #24303e; }
+  th:first-child, td:first-child { text-align:left; }
+  .pct-ok { color:#5fd18b; } .pct-warn { color:#f2c94c; } .pct-bad { color:#eb5757; }
+  footer { padding:16px 20px; font-size:11px; color:var(--sub); line-height:1.6; }
+</style>
+</head>
+<body>
+<header>
+  <h1>電力 連系線潮流・エリア予備率ダッシュボード</h1>
+  <div class="meta" id="meta">読み込み中…</div>
+</header>
+
+<main>
+  <section class="card">
+    <h2>連系線 計画潮流（順方向を正・MW）</h2>
+    <div><label>連系線: <select id="lineSel"></select></label></div>
+    <canvas id="tieChart" height="110"></canvas>
+  </section>
+
+  <section class="card">
+    <h2>エリア予備率（直近コマ）</h2>
+    <table id="reserveTbl">
+      <thead><tr><th>エリア</th><th>時刻</th><th>需要(MW)</th>
+      <th>供給力(MW)</th><th>予備力(MW)</th><th>エリア予備率</th><th>広域予備率</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+</main>
+
+<footer>
+  出典：電力広域的運営推進機関（OCCTO）広域予備率Web公表システム
+  （ https://web-kohyo.occto.or.jp/ ）を編集・加工して作成。<br>
+  本データは<strong>速報値であり、当サイトによる非公式な再構成</strong>です。
+  データの正確性・完全性は保証されません。OCCTOおよび一般送配電事業者は
+  当サイトの内容について責任を負いません。
+</footer>
+
+<script>
+const $ = (s) => document.querySelector(s);
+let tieChart;
+
+function pctClass(v){ if(v==null) return ""; if(v>=8) return "pct-ok";
+  if(v>=3) return "pct-warn"; return "pct-bad"; }
+
+async function load(){
+  const [tie, res, upd] = await Promise.all([
+    fetch("data/tieline.json").then(r=>r.json()),
+    fetch("data/reserve.json").then(r=>r.json()),
+    fetch("data/updated.json").then(r=>r.json()).catch(()=>({})),
+  ]);
+
+  $("#meta").textContent =
+    `対象日 ${tie.date ?? "-"} ／ OCCTO更新 ${tie.source_update ?? "-"}`
+    + (upd.fetched_at ? ` ／ 取得 ${new Date(upd.fetched_at).toLocaleString("ja-JP")}` : "");
+
+  const lines = tie.lines || {};
+  const names = Object.keys(lines);
+  const sel = $("#lineSel");
+  sel.innerHTML = names.map(n=>`<option>${n}</option>`).join("");
+  sel.onchange = ()=>drawTie(lines[sel.value]);
+  if(names.length) drawTie(lines[names[0]]);
+
+  const tb = $("#reserveTbl tbody");
+  tb.innerHTML = "";
+  for(const [area, recs] of Object.entries(res.areas || {})){
+    const last = recs[recs.length-1];
+    const cls = pctClass(last.area_reserve_pct);
+    tb.insertAdjacentHTML("beforeend", `<tr>
+      <td>${area}</td><td>${last.time}</td>
+      <td>${fmt(last.area_demand)}</td><td>${fmt(last.area_supply)}</td>
+      <td>${fmt(last.area_margin)}</td>
+      <td class="${cls}">${last.area_reserve_pct ?? "-"}%</td>
+      <td>${last.wide_reserve_pct ?? "-"}%</td></tr>`);
+  }
+}
+
+function fmt(v){ return v==null ? "-" : Math.round(v).toLocaleString(); }
+
+function drawTie(recs){
+  const labels = recs.map(r=>r.time);
+  const data = recs.map(r=>r.flow);
+  if(tieChart) tieChart.destroy();
+  tieChart = new Chart($("#tieChart"), {
+    type:"line",
+    data:{ labels, datasets:[{ label:"計画潮流(MW)", data,
+      borderColor:"#4fa3ff", backgroundColor:"rgba(79,163,255,.15)",
+      fill:true, pointRadius:0, tension:.2 }]},
+    options:{ responsive:true, scales:{
+      x:{ ticks:{ color:"#8b98a5", maxTicksLimit:12 }, grid:{ color:"#24303e" }},
+      y:{ ticks:{ color:"#8b98a5" }, grid:{ color:"#24303e" }}},
+      plugins:{ legend:{ labels:{ color:"#e6edf3" }}}}
+  });
+}
+
+load().catch(e=>{ $("#meta").textContent = "読み込み失敗: "+e; });
+</script>
+</body>
+</html>
